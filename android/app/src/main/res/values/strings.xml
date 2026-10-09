@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">FullStay</string>
+    <string name="service_name">FullStay buttons</string>
+    <string name="tile_label">Button shortcuts</string>
+    <string name="service_desc">Turns the volume buttons into shortcuts: volume up takes a screenshot, volume down switches between FullStay and the last app you used. It only sees which app is on screen and the two volume buttons. It remembers just the last app\'s name and never sends anything anywhere.</string>
+</resources>

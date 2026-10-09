@@ -1,0 +1,67 @@
+plugins { id 'com.android.application' }
+
+/** The FullStay sign-up key: the same value as the Worker's FS_KEY secret. */
+def fullstayKey() {
+    def k = (project.findProperty('fullstayKey') ?: '').toString().trim()
+    if (!(k ==~ /[A-Za-z0-9_\-]*/)) throw new GradleException('fullstayKey may only use letters, numbers, - and _')
+    if (!k.isEmpty() && k.length() < 24) throw new GradleException('fullstayKey must be at least 24 characters (same as FS_KEY on the site)')
+    return k
+}
+
+android {
+    namespace 'com.fullstay.browser'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'com.fullstay.browser'
+        minSdk 29          // Android 10+: saving to the gallery needs no storage permission
+        targetSdk 36
+        versionCode 7
+        versionName '2.5'
+        // Stay fullscreen when you come back (the original behaviour).
+        buildConfigField 'boolean', 'EXIT_FULLSCREEN_ON_RETURN', 'false'
+        // Remote control from rovwf.com (see RemoteFlag). The key comes from gradle.properties ("fullstayKey"),
+        // so it never has to be written into the source. Empty key = remote control off.
+        buildConfigField 'String', 'FS_BASE', '"https://rovwf.com"'
+        buildConfigField 'String', 'FS_KEY', "\"${fullstayKey()}\""
+    }
+    buildFeatures { buildConfig true }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            all { maxHeapSize = '1g'; testLogging { events 'failed'; exceptionFormat 'full' } }
+        }
+    }
+    lint { abortOnError true; checkReleaseBuilds true }
+}
+
+tasks.withType(JavaCompile).configureEach { options.compilerArgs += ['-Xlint:all', '-Xlint:-options', '-Xlint:-serial'] }
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'com.google.android.material:material:1.13.0'
+    implementation 'androidx.webkit:webkit:1.14.0'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16.1'
+    testImplementation 'androidx.test:core:1.6.1'
+}
+
+// Robolectric's Android 16 (SDK 36) simulation needs Java 21 to run the tests.
+// Use -PtestJava=/path/to/java21/bin/java, or let Gradle find a Java 21 toolchain.
+tasks.withType(Test).configureEach {
+    if (project.hasProperty('testJava')) {
+        executable = project.property('testJava')
+    } else {
+        javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+    }
+}

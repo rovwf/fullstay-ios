@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.FullStay" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#A9C7FF</item>
+        <item name="colorOnPrimary">#003063</item>
+        <item name="colorPrimaryContainer">#00468C</item>
+        <item name="colorOnPrimaryContainer">#D6E3FF</item>
+    </style>
+</resources>
