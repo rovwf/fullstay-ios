@@ -1,0 +1,132 @@
+name: FullStay iOS build
+
+# Builds FullStay.ipa (Reynard + FullStay) on GitHub's Mac machines. Start it from the Actions tab
+# ("Run workflow"). The finished FullStay.ipa is attached to the run as an artifact; install it with
+# AltStore or SideStore (choose "Keep App Extensions").
+#
+# One-time setup: repository Settings > Secrets and variables > Actions > New repository secret
+#   FULLSTAY_KEY = the same value as the FS_KEY secret on your Cloudflare Worker (24+ letters/numbers/-/_).
+# Without it the app still builds, but without the rovwf.com remote switch (it always stays in fullscreen).
+#
+# The first build compiles the whole Gecko engine and can take several hours; later builds reuse caches.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build FullStay.ipa
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: standard
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Put the rovwf.com key into the app
+        env:
+          FULLSTAY_KEY: ${{ secrets.FULLSTAY_KEY }}
+        run: |
+          if [ -z "$FULLSTAY_KEY" ]; then
+            echo "::warning::No FULLSTAY_KEY secret: building without the rovwf.com remote switch."
+            exit 0
+          fi
+          if ! printf '%s' "$FULLSTAY_KEY" | grep -Eq '^[A-Za-z0-9_-]{24,}$'; then
+            echo "::error::FULLSTAY_KEY must be 24+ characters: letters, numbers, - and _ only."
+            exit 1
+          fi
+          printf 'enum FullStayKey {\n    static let value = "%s"\n}\n' "$FULLSTAY_KEY" > browser/Reynard/FullStay/FullStayKey.swift
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Install build dependencies
+        run: |
+          brew install python@3.12 lld cbindgen llvm
+          echo "$(brew --prefix python@3.12)/libexec/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Initialize submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive support/idevice
+          git submodule update --init --depth 1 engine/firefox
+
+      - name: Update Gecko source
+        run: ./tools/development/update-gecko.sh
+
+      - name: Apply Gecko patches
+        run: ./tools/development/apply-patches.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Hash Rust toolchain for cache
+        id: rust_toolchain
+        run: echo "hash=$(rustc -Vv | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Gecko dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.mozbuild
+          key: buildcache-gecko-deps-standard-${{ steps.rust_toolchain.outputs.hash }}-${{ hashFiles('engine/release.txt') }}
+          restore-keys: |
+            buildcache-gecko-deps-standard-${{ steps.rust_toolchain.outputs.hash }}-
+
+      - name: Restore idevice build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            support/idevice/target
+            browser/Reynard/JIT/RPPairing/libidevice_ffi.a
+          key: buildcache-idevice-${{ steps.rust_toolchain.outputs.hash }}-${{ hashFiles('support/idevice/Cargo.lock', 'support/idevice/Cargo.toml', 'tools/development/build-idevice.sh') }}
+          restore-keys: |
+            buildcache-idevice-${{ steps.rust_toolchain.outputs.hash }}-
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Build Gecko
+        env:
+          CC: clang
+          CXX: clang++
+          LD: ld64.lld
+        run: ./tools/development/build-gecko.sh --use-sccache --auto-clobber
+
+      - name: Build idevice support library
+        run: ./tools/development/build-idevice.sh
+
+      - name: Install packaging dependencies
+        run: brew install ldid
+
+      - name: Build app
+        run: ./tools/release/build-app.sh --no-signing
+
+      - name: Create IPA
+        run: |
+          ./tools/release/create-ipa.sh
+          mv dist/Reynard.ipa dist/FullStay.ipa
+
+      - name: Upload FullStay.ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: FullStay.ipa
+          path: dist/FullStay.ipa
+          if-no-files-found: error
